@@ -37,19 +37,25 @@ FROM alpine
 ENV TZ=Asia/Tehran
 WORKDIR /app
 
+# تغییر اول: اضافه کردن nginx و libc6-compat به لیست نصب
 RUN apk add --no-cache --update \
   ca-certificates \
   tzdata \
   fail2ban \
   bash \
   curl \
-  openssl
+  openssl \
+  nginx \
+  libc6-compat
+
+# دانلود و نصب برنامه کلودفلر (cloudflared)
+RUN curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/bin/cloudflared && \
+    chmod +x /usr/bin/cloudflared
 
 COPY --from=builder /app/build/ /app/
 COPY --from=builder /app/DockerEntrypoint.sh /app/
 COPY --from=builder /app/x-ui.sh /usr/bin/x-ui
 COPY --from=builder /app/internal/web/translation /app/internal/web/translation
-
 
 # Configure fail2ban
 RUN rm -f /etc/fail2ban/jail.d/alpine-ssh.conf \
@@ -69,6 +75,9 @@ ENV XUI_ENABLE_FAIL2BAN="true"
 ENV XUI_DB_TYPE=""
 ENV XUI_DB_DSN=""
 EXPOSE 2053
-VOLUME [ "/etc/x-ui" ]
+
+# تغییر دوم: کامنت کردن Volume برای جلوگیری از کرش در Back4App
+# VOLUME [ "/etc/x-ui" ]
+
 CMD [ "./x-ui" ]
 ENTRYPOINT [ "/app/DockerEntrypoint.sh" ]
