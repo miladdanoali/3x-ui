@@ -27,10 +27,7 @@ failregex   = \[LIMIT_IP\]\s*Email\s*=\s*<F-USER>.+</F-USER>\s*\|\|\s*Disconnect
 ignoreregex =
 EOF
 
-    # Ports to exempt from the ban so an over-limit proxy client can never lock
-    # the administrator out of SSH or the panel. The ban still covers every other
-    # TCP port (including all Xray inbounds), so IP-limit keeps working for inbounds
-    # added later without regenerating these files.
+    # Ports to exempt from the ban
     SSH_PORTS=$(grep -oE '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config 2>/dev/null | grep -oE '[0-9]+' | paste -sd, -)
     [ -z "$SSH_PORTS" ] && SSH_PORTS="22"
     PANEL_PORT=$(/app/x-ui setting -show true 2>/dev/null | grep -Eo 'port: .+' | awk '{print $2}')
@@ -69,14 +66,60 @@ EOF
     fail2ban-client -x start
 fi
 
-# Certificate auto-renewal: acme.sh (installed by the panel's SSL menu) relies
-# on a root crontab entry, but the crontab is lost when the container is
-# recreated and crond was never started. Re-register the job and run crond so
-# renewals actually fire; mount /root/.acme.sh as a volume to keep acme state.
+# Certificate auto-renewal
 if [ -f /root/.acme.sh/acme.sh ]; then
     /root/.acme.sh/acme.sh --install-cronjob >/dev/null 2>&1
     crond
 fi
 
-# Run x-ui
+# ========================================================
+# تغییرات جدید: سیستم مسیرساز Nginx
+# ========================================================
+
+# ۱. ساخت کانفیگ Nginx برای تفکیک ترافیک
+cat > /etc/nginx/nginx.conf << 'EOF'
+events {}
+http {
+    server {
+        listen 2053;
+        
+        # هدایت مسیر اصلی به پنل مدیریت سنایی (پورت ۲۰۵۴)
+        location / {
+            proxy_pass http://127.0.0.1:2054;
+            proxy_set_header Host $host;
+        }
+
+        # هدایت مسیر /tunnel به کانکفیگ VLESS (پورت ۸۴۴۳)
+        location /tunnel {
+            proxy_pass http://127.0.0.1:8443;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+        }
+
+        # هدایت مسیر /sub برای لینک‌های سابسکریپشن (پورت ۲۰۵۵)
+        location /sub {
+            proxy_pass http://127.0.0.1:2055;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+}
+EOF
+
+# ۲. اجرای Nginx در پس‌زمینه
+nginx
+
+# ۳. انتقال پنل مدیریت به پورت ۲۰۵۴ تا پورت ۲۰۵۳ برای Nginx آزاد شود
+/app/x-ui setting -port 2054
+
+# تنظیم رمز و نام کاربری پیش‌فرض
+/app/x-ui setting -username admin -password admin
+
+# اجرای تونل سریع کلودفلر و هدایت خروجی به تب Logs در داشبورد
+/usr/bin/cloudflared tunnel --url http://127.0.0.1:2053 2>&1 &
+
+# اجرای هسته اصلی پنل
 exec /app/x-ui
